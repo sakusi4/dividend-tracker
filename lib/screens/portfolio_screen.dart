@@ -1,6 +1,8 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
 import '../state/app_state.dart';
 import '../models/position.dart';
@@ -27,7 +29,6 @@ class PortfolioScreen extends StatelessWidget {
   }
 }
 
-
 class _Body extends StatelessWidget {
   const _Body();
 
@@ -44,9 +45,43 @@ class _Body extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
         children: [
-          const _SectionTitle('투자 설정'),
-          const _InvestSettingsCard(),
-          const SizedBox(height: 26),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionTitle('목표 설정'),
+                  const _InvestSettingsCard(),
+                ],
+              ),
+              const SizedBox(width: 20),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionTitle('요약'),
+                  const _InvestSummaryCard(),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          const _SectionTitle('내 자산 비율'),
+          if (app.positions.isEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Text(
+                  '아직 종목이 없습니다.',
+                  style: TextStyle(color: CupertinoColors.systemGrey),
+                ),
+              ),
+            ),
+          ] else ...[
+            SizedBox(height: 250, child: _AllocationPieChart()),
+            const SizedBox(height: 16),
+          ],
 
           const _SectionTitle('내 포트폴리오'),
           const SizedBox(height: 6),
@@ -84,57 +119,8 @@ class _SectionTitle extends StatelessWidget {
   );
 }
 
-
-class _InvestSettingsCard extends StatefulWidget {
-  const _InvestSettingsCard();
-
-  @override
-  State<_InvestSettingsCard> createState() => _InvestSettingsCardState();
-}
-
-
-class _InvestSettingsCardState extends State<_InvestSettingsCard> {
-  late final TextEditingController _goalCtl;
-  late final TextEditingController _monthlyCtl;
-
-  bool _editGoal = false; // 목표 월배당 편집 여부
-  bool _editMonthly = false; // 월 투자 금액 편집 여부
-
-  @override
-  void initState() {
-    super.initState();
-    final app = context.read<AppState>();
-    _goalCtl = TextEditingController(
-      text: app.targetPerMonth.toStringAsFixed(0),
-    );
-    _monthlyCtl = TextEditingController(
-      text: app.monthlyContribution.toStringAsFixed(0),
-    );
-  }
-
-  void _saveGoal() {
-    context.read<AppState>().updateGoal(double.tryParse(_goalCtl.text) ?? 0);
-    setState(() => _editGoal = false);
-  }
-
-  void _cancelGoal() {
-    final app = context.read<AppState>();
-    _goalCtl.text = app.targetPerMonth.toStringAsFixed(0);
-    setState(() => _editGoal = false);
-  }
-
-  void _saveMonthly() {
-    context.read<AppState>().updateMonthlyContribution(
-      double.tryParse(_monthlyCtl.text) ?? 0,
-    );
-    setState(() => _editMonthly = false);
-  }
-
-  void _cancelMonthly() {
-    final app = context.read<AppState>();
-    _monthlyCtl.text = app.monthlyContribution.toStringAsFixed(0);
-    setState(() => _editMonthly = false);
-  }
+class _InvestSummaryCard extends StatelessWidget {
+  const _InvestSummaryCard();
 
   @override
   Widget build(BuildContext context) {
@@ -142,7 +128,16 @@ class _InvestSettingsCardState extends State<_InvestSettingsCard> {
     const label = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
     const value = TextStyle(fontSize: 15);
 
+    final totalValue = app.positions.fold<double>(
+      0.0,
+      (sum, p) => sum + p.evaluation,
+    );
+
     return Container(
+      constraints: const BoxConstraints(
+        minWidth: 150, // ← 원하는 최소 폭
+        // maxWidth: double.infinity  // 최대는 제한 없음(기본값)
+      ),
       decoration: BoxDecoration(
         color: CupertinoColors.white,
         borderRadius: BorderRadius.circular(18),
@@ -154,142 +149,202 @@ class _InvestSettingsCardState extends State<_InvestSettingsCard> {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('총 평가금', style: label),
+          const SizedBox(height: 5),
+          Text('\$${totalValue.toStringAsFixed(2)}', style: value),
+        ],
+      ),
+    );
+  }
+}
+
+class _InvestSettingsCard extends StatefulWidget {
+  const _InvestSettingsCard({super.key});
+  @override
+  State<_InvestSettingsCard> createState() => _InvestSettingsCardState();
+}
+
+class _InvestSettingsCardState extends State<_InvestSettingsCard> {
+  Future<void> _showEditPopup() async {
+    final app = context.read<AppState>();
+    final goalCtl = TextEditingController(
+      text:
+          app.targetPerMonth == 0 ? '' : app.targetPerMonth.toStringAsFixed(0),
+    );
+    final monthlyCtl = TextEditingController(
+      text:
+          app.monthlyContribution == 0
+              ? ''
+              : app.monthlyContribution.toStringAsFixed(0),
+    );
+
+    await showCupertinoDialog<void>(
+      context: context,
+      builder:
+          (ctx) => CupertinoAlertDialog(
+            title: const Text('목표 설정'),
+            content: Column(
+              children: [
+                const SizedBox(height: 8),
+                _CupertinoField(label: '목표 월 배당금', controller: goalCtl),
+                const SizedBox(height: 12),
+                _CupertinoField(label: '월 투자 금액', controller: monthlyCtl),
+              ],
+            ),
+            actions: [
+              CupertinoDialogAction(
+                isDefaultAction: true,
+                child: const Text('저장'),
+                onPressed: () {
+                  context.read<AppState>()
+                    ..updateGoal(double.tryParse(goalCtl.text) ?? 0)
+                    ..updateMonthlyContribution(
+                      double.tryParse(monthlyCtl.text) ?? 0,
+                    );
+                  Navigator.pop(ctx);
+                },
+              ),
+              CupertinoDialogAction(
+                child: const Text('취소'),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ],
+          ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    const label = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
+    const value = TextStyle(fontSize: 15);
+
+    return Container(
+      constraints: const BoxConstraints(minWidth: 150),
+      decoration: BoxDecoration(
+        color: CupertinoColors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: CupertinoColors.systemGrey.withOpacity(.25),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Expanded(child: Text('목표 월배당금', style: label)),
-              if (_editGoal) ...[
-                SizedBox(
-                  width: 100,
-                  child: CupertinoTextField(
-                    controller: _goalCtl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: false,
-                    ),
-                    textAlign: TextAlign.end,
-                  ),
-                ),
-
-                const SizedBox(width: 10),
-
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CupertinoButton(
-                      minSize: 0,
-                      padding: EdgeInsets.zero,
-                      onPressed: _saveGoal,
-                      child: const Icon(CupertinoIcons.check_mark_circled),
-                    ),
-
-                    const SizedBox(width: 10),
-
-                    CupertinoButton(
-                      minSize: 0,
-                      padding: EdgeInsets.zero,
-                      onPressed: _cancelGoal,
-                      child: const Icon(
-                        CupertinoIcons.xmark_circle,
-                        color: CupertinoColors.systemRed,
-                      ),
-                    ),
-                  ],
-                ),
-              ] else ...[
-                Text(app.targetPerMonth.toStringAsFixed(0), style: value),
-                CupertinoButton(
-                  padding: EdgeInsets.zero,
-                  child: const Icon(CupertinoIcons.pencil),
-                  onPressed: () => setState(() => _editGoal = true),
-                ),
-              ],
+              Text('목표 월 배당금', style: label),
+              const SizedBox(width: 10),
+              CupertinoButton(
+                padding: EdgeInsets.zero,
+                minSize: 12,
+                onPressed: _showEditPopup,
+                child: const Icon(CupertinoIcons.pencil),
+              ),
             ],
           ),
-
-          // ── 월 투자 금액 행 ──
-          Row(
-            children: [
-              const Expanded(child: Text('월 투자 금액', style: label)),
-              if (_editMonthly) ...[
-                SizedBox(
-                  width: 100,
-                  child: CupertinoTextField(
-                    controller: _monthlyCtl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: false,
-                    ),
-                    textAlign: TextAlign.end,
-                  ),
-                ),
-
-                const SizedBox(width: 10),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CupertinoButton(
-                      minSize: 0,
-                      padding: EdgeInsets.zero,
-                      onPressed: _saveMonthly,
-                      child: const Icon(CupertinoIcons.check_mark_circled),
-                    ),
-                    const SizedBox(width: 10), // 아이콘 간격 아주 좁게
-                    CupertinoButton(
-                      minSize: 0,
-                      padding: EdgeInsets.zero,
-                      onPressed: _cancelMonthly,
-                      child: const Icon(
-                        CupertinoIcons.xmark_circle,
-                        color: CupertinoColors.systemRed,
-                      ),
-                    ),
-                  ],
-                ),
-              ] else ...[
-                Text(app.monthlyContribution.toStringAsFixed(0), style: value),
-                CupertinoButton(
-                  padding: EdgeInsets.zero,
-                  child: const Icon(CupertinoIcons.pencil),
-                  onPressed: () => setState(() => _editMonthly = true),
-                ),
-              ],
-            ],
+          // 표시용 값들
+          Text(
+            app.targetPerMonth == 0
+                ? '설정해 주세요!'
+                : '\$${app.targetPerMonth.toStringAsFixed(0)}',
+            style: value,
+          ),
+          const SizedBox(height: 8),
+          Text('월 투자 금액', style: label),
+          Text(
+            app.monthlyContribution == 0
+                ? '설정해 주세요!'
+                : '\$${app.monthlyContribution.toStringAsFixed(0)}',
+            style: value,
           ),
         ],
       ),
     );
   }
+}
+
+class _CupertinoField extends StatelessWidget {
+  const _CupertinoField({required this.label, required this.controller});
+  final String label;
+  final TextEditingController controller;
 
   @override
-  void dispose() {
-    _goalCtl.dispose();
-    _monthlyCtl.dispose();
-    super.dispose();
+  Widget build(BuildContext context) {
+    return CupertinoTextField(
+      controller: controller,
+      placeholder: label,
+      prefix: Padding(
+        padding: const EdgeInsets.only(left: 8),
+        child: Text(
+          label,
+          style: const TextStyle(color: CupertinoColors.systemGrey),
+        ),
+      ),
+      keyboardType: const TextInputType.numberWithOptions(decimal: false),
+      textAlign: TextAlign.end,
+      decoration: BoxDecoration(
+        color: CupertinoColors.secondarySystemBackground.resolveFrom(context),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    );
   }
 }
 
-
-class _StockCard extends StatelessWidget {
+class _StockCard extends StatefulWidget {
   final StockPosition p;
   final NumberFormat usd;
   final NumberFormat pct;
   const _StockCard(this.p, this.usd, this.pct);
 
   @override
+  State<_StockCard> createState() => _StockCardState();
+}
+
+class _StockCardState extends State<_StockCard> {
+  late final TextEditingController _allocCtl;
+
+  @override
+  void initState() {
+    super.initState();
+    _allocCtl = TextEditingController(
+      text: (widget.p.allocationRate * 100).toStringAsFixed(0),
+    );
+  }
+
+  @override
+  void dispose() {
+    _allocCtl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final p = widget.p;
+
     return GestureDetector(
       onLongPress: () => _showMenu(context),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: CupertinoColors.systemGrey6,
+          color: CupertinoColors.systemGrey.withOpacity(0.1),
           borderRadius: BorderRadius.circular(18),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 심볼·평가금
             Row(
               children: [
                 Text(
@@ -300,31 +355,81 @@ class _StockCard extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                Text(
-                  usd.format(p.evaluation),
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    const Text(
+                      '평가금',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: CupertinoColors.systemGrey,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      widget.usd.format(p.evaluation),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
             const SizedBox(height: 8),
+            // 칩 그룹 1
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _chip('Qty', '${p.quantity}'),
-                _chip('Avg', usd.format(p.avgCost)),
-                _chip('Price', usd.format(p.currentPrice)),
+                _chip('보유주', '${p.quantity}'),
+                _chip('평단가', widget.usd.format(p.avgCost)),
+                _chip('주가', widget.usd.format(p.currentPrice)),
               ],
             ),
             const SizedBox(height: 8),
+            // 칩 그룹 2
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _chip('Yield', pct.format(p.dividendYield)),
-                _chip('Div Grow', pct.format(p.dividendGrowthRate)),
-                _chip('Px Grow', pct.format(p.priceGrowthRate)),
+                _chip('배당률', widget.pct.format(p.dividendYield)),
+                _chip('배당성장률', widget.pct.format(p.dividendGrowthRate)),
+                _chip('주가성장률', widget.pct.format(p.priceGrowthRate)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // 배분 비율 입력
+            Row(
+              children: [
+                const Spacer(),
+                const Text(
+                  '배분 비율',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 70,
+                  child: CupertinoTextField(
+                    controller: _allocCtl,
+                    showCursor: false,
+                    cursorColor: CupertinoColors.transparent,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: false,
+                    ),
+                    suffix: const Text(
+                      '% ',
+                      style: TextStyle(color: CupertinoColors.systemGrey),
+                    ),
+                    textAlign: TextAlign.end,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 8,
+                    ),
+                    onChanged: (txt) {
+                      final pct = (double.tryParse(txt) ?? 0) / 100;
+                      context.read<AppState>().updateAllocation(widget.p, pct);
+                    },
+                  ),
+                ),
               ],
             ),
           ],
@@ -363,7 +468,7 @@ class _StockCard extends StatelessWidget {
                   Navigator.pushNamed(
                     context,
                     InputFormScreen.route,
-                    arguments: p,
+                    arguments: widget.p,
                   );
                 },
               ),
@@ -395,7 +500,7 @@ class _StockCard extends StatelessWidget {
                 isDestructiveAction: true,
                 child: const Text('삭제'),
                 onPressed: () {
-                  context.read<AppState>().removePosition(p);
+                  context.read<AppState>().removePosition(widget.p);
                   Navigator.pop(context);
                 },
               ),
@@ -408,7 +513,6 @@ class _StockCard extends StatelessWidget {
     );
   }
 }
-
 
 class _CalcButton extends StatelessWidget {
   const _CalcButton();
@@ -429,9 +533,70 @@ class _CalcButton extends StatelessWidget {
             showCupertinoDialog(
               context: context,
               builder:
-                  (_) => const CupertinoAlertDialog(
-                    title: Text('알림'),
-                    content: Text('종목을 먼저 추가해 주세요.'),
+                  (_) => CupertinoAlertDialog(
+                    title: const Text('알림'),
+                    content: const Text('종목을 먼저 추가해 주세요.'),
+                    actions: [
+                      CupertinoDialogAction(
+                        child: const Text('확인'),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+            );
+            return;
+          } else if (context.read<AppState>().targetPerMonth == 0) {
+            showCupertinoDialog(
+              context: context,
+              builder:
+                  (_) => CupertinoAlertDialog(
+                    title: const Text('알림'),
+                    content: const Text('목표 월 배당금을 설정해 주세요.'),
+                    actions: [
+                      CupertinoDialogAction(
+                        child: const Text('확인'),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+            );
+            return;
+          } else if (context.read<AppState>().monthlyContribution == 0) {
+            showCupertinoDialog(
+              context: context,
+              builder:
+                  (_) => CupertinoAlertDialog(
+                    title: const Text('알림'),
+                    content: const Text('월 투자 금액을 설정해 주세요.'),
+                    actions: [
+                      CupertinoDialogAction(
+                        child: const Text('확인'),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+            );
+            return;
+          }
+
+          final app = context.read<AppState>();
+          final allocSum = app.positions.fold<double>(
+            0.0,
+            (s, p) => s + p.allocationRate,
+          );
+          if (app.positions.isNotEmpty && (allocSum - 1).abs() > 0.001) {
+            showCupertinoDialog(
+              context: context,
+              builder:
+                  (_) => CupertinoAlertDialog(
+                    title: const Text('알림'),
+                    content: const Text('배분 비율의 합이 100%가 되도록 설정해 주세요.'),
+                    actions: [
+                      CupertinoDialogAction(
+                        child: const Text('확인'),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
                   ),
             );
             return;
@@ -441,4 +606,64 @@ class _CalcButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AllocationPieChart extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final positions = context.watch<AppState>().positions;
+    final total = positions.fold<double>(0, (sum, p) => sum + p.evaluation);
+    final data =
+        total > 0
+            ? positions
+                .map((p) => _PieData(p.symbol, p.evaluation / total * 100))
+                .toList()
+            : <_PieData>[];
+
+    return SfCircularChart(
+      title: ChartTitle(
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+      legend: Legend(
+        isVisible: true,
+        position: LegendPosition.bottom,
+        overflowMode: LegendItemOverflowMode.wrap,
+      ),
+
+      palette: const <Color>[
+        Color(0xFF81C784), // 연녹색
+        Color(0xFF4FC3F7), // 연파랑
+        Color(0xFFFFF176), // 연노랑
+        Color(0xFFBA68C8), // 연보라
+        Color(0xFFFF8A65), // 연코랄
+        Color(0xFF90A4AE), // 연회색
+      ],
+      series: <DoughnutSeries<_PieData, String>>[
+        DoughnutSeries<_PieData, String>(
+          dataSource: data,
+          xValueMapper: (d, _) => d.symbol,
+          yValueMapper: (d, _) => d.percent,
+          dataLabelMapper: (d, _) => '${d.percent.toStringAsFixed(0)}%',
+          dataLabelSettings: const DataLabelSettings(
+            isVisible: true,
+            labelPosition: ChartDataLabelPosition.inside,
+            textStyle: TextStyle(fontSize: 12, color: Colors.white),
+          ),
+          // 도넛 스타일
+          radius: '100%',
+          innerRadius: '70%',
+          explode: false,
+          // 세그먼트 간 경계
+          strokeColor: Colors.white,
+          strokeWidth: 1,
+        ),
+      ],
+    );
+  }
+}
+
+class _PieData {
+  final String symbol;
+  final double percent;
+  _PieData(this.symbol, this.percent);
 }

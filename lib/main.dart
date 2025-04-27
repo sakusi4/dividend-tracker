@@ -1,13 +1,19 @@
 import 'package:flutter/cupertino.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'state/app_state.dart';
 import 'screens/splash_screen.dart';
 import 'screens/portfolio_screen.dart';
 import 'screens/input_form_screen.dart';
 import 'screens/result_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(
+    fileName: kReleaseMode ? '.env.production' : '.env.development'
+  );
+
   runApp(const DividendTrackerApp());
 }
 

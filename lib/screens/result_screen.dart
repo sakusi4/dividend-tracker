@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
@@ -14,6 +16,8 @@ class ResultScreen extends StatefulWidget {
   State<ResultScreen> createState() => _ResultScreenState();
 }
 
+enum _Gran { month, quarter, year }
+
 class _ResultScreenState extends State<ResultScreen> {
   static const Map<String, int> _segMap = {
     '3Y': 36,
@@ -21,8 +25,10 @@ class _ResultScreenState extends State<ResultScreen> {
     '10Y': 120,
     'Goal': -1, // 목표 달성 시점까지
   };
-  late int _horizon = _segMap.values.first;
 
+  _Gran _gran = _Gran.month;
+
+  late int _horizon = _segMap.values.first;
 
   final NumberFormat _fmt0 = NumberFormat.currency(
     symbol: '\$',
@@ -40,6 +46,25 @@ class _ResultScreenState extends State<ResultScreen> {
     decimalDigits: 0,
   );
 
+  static const int _batch = 30;
+  int _loaded = _batch;
+
+  List<_Row> _filterRows(List<_Row> src) {
+    switch (_gran) {
+      case _Gran.month:
+        return src;                                 // 모두 보여줌
+      case _Gran.quarter:
+        return [
+          for (int i = 0; i < src.length; i++)
+            if ((i + 1) % 3 == 0) src[i]            // 3,6,9,… 달만
+        ];
+      case _Gran.year:
+        return [
+          for (int i = 0; i < src.length; i++)
+            if ((i + 1) % 12 == 0) src[i]           // 12,24,36,… 달만
+        ];
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +76,7 @@ class _ResultScreenState extends State<ResultScreen> {
       );
     }
 
-    // 계산 – 화면 내에서 즉석 처리 (30 년 한도)
+    // 30년 최대
     final _Forecast f = _runForecast(
       positions: positions,
       monthlyContribution: app.monthlyContribution,
@@ -64,7 +89,12 @@ class _ResultScreenState extends State<ResultScreen> {
         (_horizon == -1) ? (f.hitMonth ?? f.points.length) : _horizon;
 
     final chartData = f.points.take(horizon).toList();
-    final rows = f.rows.take(horizon).toList();
+
+    final rowsAll = f.rows.take(horizon).toList();
+    final rowsView = _filterRows(rowsAll);
+
+    // 로드 수 한계 보정
+    _loaded = _loaded.clamp(0, rowsView.length);
 
     return CupertinoPageScaffold(
       navigationBar: const CupertinoNavigationBar(middle: Text('예측 결과')),
@@ -75,12 +105,22 @@ class _ResultScreenState extends State<ResultScreen> {
             SliverToBoxAdapter(
               child: _buildChartCard(chartData, app.targetPerMonth),
             ),
+            SliverToBoxAdapter(child: _buildGranularitySegment()),
+
+            // ── 무한 스크롤 SliverList ──
             SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (_, i) => _buildDataCard(rows[i], app.targetPerMonth),
-                childCount: rows.length,
-              ),
+              delegate: SliverChildBuilderDelegate((_, i) {
+                if (i == _loaded - 1 && _loaded < rowsView.length) {
+                  Future.microtask(
+                    () => setState(() {
+                      _loaded = (_loaded + _batch).clamp(0, rowsView.length);
+                    }),
+                  );
+                }
+                return _buildDataCard(rowsView[i], app.targetPerMonth);
+              }, childCount: _loaded),
             ),
+
             SliverPadding(
               padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).padding.bottom + 16,
@@ -221,7 +261,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         color: CupertinoColors.systemGrey,
                       ),
                     ),
-                    const SizedBox(width: 5,),
+                    const SizedBox(width: 5),
                     Text(
                       _fmt2.format(r.monthDiv),
                       style: const TextStyle(
@@ -279,9 +319,9 @@ class _ResultScreenState extends State<ResultScreen> {
               runSpacing: 6,
               children: [
                 _infoChip('평가금', _fmt0.format(r.value)),
-                _infoChip('보유주', r.shares.toStringAsFixed(1)),
-                _infoChip('주가', _fmt2.format(r.price)),
-                _infoChip('배당/주', _fmt2.format(r.divPerShare)),
+                _infoChip('투입자본', _fmt0.format(r.cost)),
+                _infoChip('손익', _fmt0.format(r.unrealized)),
+                _infoChip('실현배당률', _pct.format(r.realizedYield)),
               ],
             ),
           ],
@@ -301,6 +341,21 @@ class _ResultScreenState extends State<ResultScreen> {
     );
   }
 
+  Widget _buildGranularitySegment() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: CupertinoSlidingSegmentedControl<_Gran>(
+        groupValue: _gran,
+        children: const {
+          _Gran.month: Text('월별'),
+          _Gran.quarter: Text('분기별'),
+          _Gran.year: Text('연도별'),
+        },
+        onValueChanged: (g) => setState(() => _gran = g ?? _gran),
+      ),
+    );
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   //  계산 엔진 (포트폴리오 전체)
   // ──────────────────────────────────────────────────────────────────────────
@@ -313,53 +368,86 @@ class _ResultScreenState extends State<ResultScreen> {
     final List<_Point> pts = [];
     final List<_Row> rows = [];
 
-    // 각 종목별 동적 상태를 배열로 유지
-    final List<double> shares = positions.map((p) => p.quantity).toList();
-    final List<double> prices = positions.map((p) => p.currentPrice).toList();
-    final List<double> yields = positions.map((p) => p.dividendYield).toList();
+    // ── 동적 상태 ──
+    final shares = positions.map((p) => p.quantity).toList();
+    final prices = positions.map((p) => p.currentPrice).toList();
+    final yields = positions.map((p) => p.dividendYield).toList();
+
+    // ── 월 성장 계수 (복리) ──
+    final monthlyPriceFactor =
+        positions
+            .map<double>(
+              (p) => math.pow(1 + p.priceGrowthRate, 1 / 12) as double,
+            )
+            .toList();
+    final monthlyYieldFactor =
+        positions
+            .map<double>(
+              (p) => math.pow(1 + p.dividendGrowthRate, 1 / 12) as double,
+            )
+            .toList();
+
+    // ── 투자 원금(초기 매입가) ──
+    double invested = positions.fold(0.0, (s, p) => s + p.quantity * p.avgCost);
 
     int? hit;
     final totalMonths = maxYears * 12;
 
     for (int m = 0; m < totalMonths; m++) {
+      // ─────────────────────────────────────────────
+      // 1) 월말 매수 (allocationRate 비율로 분배 매수)
+      // ─────────────────────────────────────────────
+      for (int i = 0; i < positions.length; i++) {
+        final buyCash = monthlyContribution * positions[i].allocationRate;
+        shares[i] += buyCash / prices[i];
+      }
+      invested += monthlyContribution; // 실제 사용한 자본 누적
+
+      // ─────────────────────────────────────────────
+      // 2) 가격·배당 월 성장 적용
+      // ─────────────────────────────────────────────
+      for (int i = 0; i < positions.length; i++) {
+        prices[i] *= monthlyPriceFactor[i];
+        yields[i] *= monthlyYieldFactor[i];
+      }
+
+      // ─────────────────────────────────────────────
+      // 3) 평가금·배당 계산 (매수분 포함)
+      // ─────────────────────────────────────────────
       double monthDivTotal = 0;
       double portfolioValue = 0;
 
       for (int i = 0; i < positions.length; i++) {
         final divPerShare = prices[i] * yields[i];
-        final monthDiv = shares[i] * divPerShare / 12;
-        monthDivTotal += monthDiv;
+        monthDivTotal += shares[i] * divPerShare / 12;
         portfolioValue += shares[i] * prices[i];
       }
 
+      // ── 포인트/행 저장 ──
       pts.add(_Point(m.toDouble(), monthDivTotal));
+
+      final annualDiv = monthDivTotal * 12;
+      final unrealized = portfolioValue - invested;
+      final yieldOnCost = annualDiv / portfolioValue;
+
       rows.add(
         _Row(
           DateTime.now().add(Duration(days: 30 * (m + 1))),
-          // 평균 주가 & 배당 계산용, 첫 종목 기준. 필요에 따라 개선 가능
-          prices.first,
+          prices.first, // 시각화용 대표
           prices.first * yields.first,
-          shares.reduce((a, b) => a + b),
+          shares.reduce((a, b) => a + b), // 총 주식 수
           monthDivTotal,
           portfolioValue,
+          invested,
+          unrealized,
+          yieldOnCost,
         ),
       );
 
+      // 목표 달성 시점 기록
       if (hit == null && monthDivTotal >= target) hit = m + 1;
-
-      // 월말 매수 – 현재는 포트폴리오 첫 종목에 전액 투입 (단순화)
-      if (monthlyContribution > 0 && positions.isNotEmpty) {
-        shares[0] += monthlyContribution / prices[0];
-      }
-
-      // 연간 성장률 적용
-      if ((m + 1) % 12 == 0) {
-        for (int i = 0; i < positions.length; i++) {
-          prices[i] *= (1 + positions[i].priceGrowthRate);
-          yields[i] *= (1 + positions[i].dividendGrowthRate);
-        }
-      }
     }
+
     return _Forecast(points: pts, rows: rows, hitMonth: hit);
   }
 }
@@ -380,6 +468,10 @@ class _Row {
   final double shares;
   final double monthDiv;
   final double value;
+  final double cost;
+  final double unrealized;
+  final double realizedYield;
+
   _Row(
     this.date,
     this.price,
@@ -387,6 +479,9 @@ class _Row {
     this.shares,
     this.monthDiv,
     this.value,
+    this.cost,
+    this.unrealized,
+    this.realizedYield,
   );
 }
 

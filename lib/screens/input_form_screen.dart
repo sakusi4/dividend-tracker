@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -28,25 +29,23 @@ class _InputFormScreenState extends State<InputFormScreen> {
 
   StockPosition? _editing; // 편집 모드 대상
   bool _initialized = false;
-  List<String> _tickerOptions = [];
 
   @override
   void initState() {
     super.initState();
-
-    http.get(Uri.parse('http://127.0.0.1:8092/api/stock')).then((res) {
-      final data = jsonDecode(res.body)['data'] as List;
-      setState(() {
-        _tickerOptions = data.map((e) => e['ticker'] as String).toList();
-      });
-    });
   }
 
   Future<void> _fetchDetail(String ticker) async {
-    final res = await http.get(Uri.parse('http://127.0.0.1:8092/api/stock/detail?ticker=$ticker'));
-    final d = jsonDecode(res.body);
-    _priceCtl.text = (d['last_close_price'] as num).toStringAsFixed(2);
-    _yieldCtl.text = (d['dividend_yield'] as num).toStringAsFixed(2);
+    try {
+      final baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      final res = await http.get(Uri.parse('$baseUrl/api/stock/detail?ticker=$ticker'));
+      final data = jsonDecode(res.body);
+
+      _priceCtl.text = (data['data'][0]['last_close_price'] as num).toStringAsFixed(2);
+      _yieldCtl.text = (data['data'][0]['dividend_yield'] as num).toStringAsFixed(2);
+    } catch (_) {
+      _showError('미국 시장에 상장된 종목만 가능합니다.');
+    }
   }
 
   @override
@@ -87,13 +86,15 @@ class _InputFormScreenState extends State<InputFormScreen> {
               Text('종목명', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               Autocomplete<String>(
+                initialValue: TextEditingValue(text: _symbolCtl.text),
                 optionsBuilder: (TextEditingValue textEditingValue) {
                   final input = textEditingValue.text;
                   if (input.length < 2) {
                     return const Iterable<String>.empty();
                   }
 
-                  return _tickerOptions.where((t) => t.toLowerCase().startsWith(input.toLowerCase()));
+                  final list = context.read<AppState>().tickerOptions;
+                  return list.where((t) => t.startsWith(input.toUpperCase()));
                 },
                 onSelected: (sel) {
                   _symbolCtl.text = sel;
@@ -119,6 +120,7 @@ class _InputFormScreenState extends State<InputFormScreen> {
                   onSubmitted: (text) {
                     onFieldSubmitted();
                     if (text.isNotEmpty) {
+                      _symbolCtl.text = text;
                       _fetchDetail(text);
                     }
                   },
@@ -135,16 +137,19 @@ class _InputFormScreenState extends State<InputFormScreen> {
               _field(label: '평균 단가 (USD)', controller: _avgCtl, isNumber: true),
 
               _sectionTitle('배당·주가 데이터'),
-              _sectionFieldWithHelper(label: '현재 주가 (USD)', controller: _priceCtl, isNumber: true, helper: '* 티커 입력 시 자동 채움'),
-              _sectionFieldWithHelper(label: '배당률 (%)', controller: _yieldCtl, isNumber: true, helper: '* 티커 입력 시 자동 채움',),
+              _sectionFieldWithHelper(label: '현재 주가 (USD)', controller: _priceCtl, isNumber: true, helper: '* 티커 입력 시 자동 채움(전일 종가)', enabled: false,),
+              _sectionFieldWithHelper(label: '배당률 (%)', controller: _yieldCtl, isNumber: true, helper: '* 티커 입력 시 자동 채움', enabled: false,),
 
               _field(label: '배당 성장률 (%/년)', controller: _divGrowCtl, isNumber: true),
               _field(label: '주가 상승률 (%/년)', controller: _priceGrowCtl, isNumber: true),
 
               const SizedBox(height: 28),
-              PrimaryButton(
-                label: _editing == null ? '저장' : '수정 완료',
-                onPressed: _onSubmit,
+              SizedBox(
+                width: double.infinity,
+                child: PrimaryButton(
+                  label: _editing == null ? '저장' : '수정 완료',
+                  onPressed: _onSubmit,
+                )
               ),
             ],
           ),
@@ -187,6 +192,7 @@ Widget _sectionFieldWithHelper({
   required TextEditingController controller,
   bool isNumber = false,
   required String helper,
+  bool enabled = true,
 }) {
   return Padding(
     padding: const EdgeInsets.only(top: 12),
@@ -203,6 +209,7 @@ Widget _sectionFieldWithHelper({
         const SizedBox(height: 6),
         CupertinoTextField(
           controller: controller,
+          enabled: enabled,
           keyboardType: isNumber
               ? const TextInputType.numberWithOptions(decimal: true)
               : TextInputType.text,
@@ -227,35 +234,94 @@ Widget _sectionFieldWithHelper({
 
   // ── 저장/수정 처리 ──
   void _onSubmit() {
-    final qty = double.tryParse(_qtyCtl.text) ?? 0;
-    final avg = double.tryParse(_avgCtl.text) ?? 0;
-    final price = double.tryParse(_priceCtl.text) ?? 0;
-    final yieldPct = double.tryParse(_yieldCtl.text) ?? 0;
-    final divGrow = double.tryParse(_divGrowCtl.text) ?? 0;
-    final priceGrow = double.tryParse(_priceGrowCtl.text) ?? 0;
+    final app = context.read<AppState>();
+    final symbol = _symbolCtl.text.trim().toUpperCase();
+    final tickers = app.tickerOptions;
 
-    if (qty <= 0 || price <= 0) {
-      _showError('보유 수량과 현재 주가는 0보다 커야 합니다.');
+    if (symbol.isEmpty) {
+      _showError('티커를 선택해주세요.');
+      return;
+    }
+    if (!tickers.contains(symbol)) {
+      _showError('유효한 티커를 선택해주세요.');
       return;
     }
 
+    final qtyText = _qtyCtl.text.trim();
+    if (qtyText.isEmpty) {
+      _showError('보유 수량을 입력해주세요.');
+      return;
+    }
+    final qty = double.tryParse(qtyText);
+    if (qty == null || qty <= 0) {
+      _showError('보유 수량은 0보다 큰 숫자여야 합니다.');
+      return;
+    }
+
+    final avgText = _avgCtl.text.trim();
+    if (avgText.isEmpty) {
+      _showError('평균 단가를 입력해주세요.');
+      return;
+    }
+    final avg = double.tryParse(avgText);
+    if (avg == null || avg < 0) {
+      _showError('평균 단가는 0 이상이어야 합니다.');
+      return;
+    }
+
+    final priceText = _priceCtl.text.trim();
+    if (priceText.isEmpty) {
+      _showError('현재 주가를 입력해주세요.');
+      return;
+    }
+    final price = double.tryParse(priceText);
+    if (price == null || price <= 0) {
+      _showError('현재 주가는 0보다 큰 숫자여야 합니다.');
+      return;
+    }
+
+    final yieldText = _yieldCtl.text.trim();
+    if (yieldText.isEmpty) {
+      _showError('배당률을 입력해주세요.');
+      return;
+    }
+    final yieldPct = double.tryParse(yieldText);
+    if (yieldPct == null || yieldPct <= 0) {
+      _showError('배당률은 0보다 큰 숫자여야 합니다.');
+      return;
+    }
+
+    final divGrowText = _divGrowCtl.text.trim();
+    if (divGrowText.isEmpty) {
+      _showError('배당 성장률을 입력해주세요.');
+      return;
+    }
+    final divGrow = double.tryParse(divGrowText) ?? 0;
+
+    final priceGrowText = _priceGrowCtl.text.trim();
+    if (priceGrowText.isEmpty) {
+      _showError('주가 상승률을 입력해주세요.');
+      return;
+    }
+    final priceGrow = double.tryParse(priceGrowText) ?? 0;
+    final alloc = _editing?.allocationRate ?? 0.0;
+
     final newPosition = StockPosition(
-      symbol: _symbolCtl.text.trim().toUpperCase(),
+      symbol: symbol,
       quantity: qty,
       avgCost: avg,
       currentPrice: price,
       dividendYield: yieldPct / 100,
       dividendGrowthRate: divGrow / 100,
       priceGrowthRate: priceGrow / 100,
+      allocationRate: alloc,
     );
 
-    final app = context.read<AppState>();
     if (_editing == null) {
       app.addPosition(newPosition);
     } else {
       app.replacePosition(_editing!, newPosition);
     }
-
     Navigator.pop(context);
   }
 
