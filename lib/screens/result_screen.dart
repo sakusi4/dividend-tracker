@@ -84,7 +84,7 @@ class _ResultScreenState extends State<ResultScreen> {
       maxYears: 30,
     );
 
-    // 기간 결정 – Goal 은 hitMonth까지, 없으면 전체
+    // 기간 결정 – Goal 은 hitMonth까지, 없으면 전체
     final int horizon =
         (_horizon == -1) ? (f.hitMonth ?? f.points.length) : _horizon;
 
@@ -101,9 +101,45 @@ class _ResultScreenState extends State<ResultScreen> {
       child: SafeArea(
         child: CustomScrollView(
           slivers: [
-            SliverToBoxAdapter(child: _buildSegment()),
+            SliverToBoxAdapter(child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '연도별 배당 추이',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: CupertinoColors.systemGrey,),
+                  ),
+                  _buildSegment(),
+                ],
+              ),
+            )),
+
             SliverToBoxAdapter(
               child: _buildChartCard(chartData, app.targetPerMonth),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    const Text(
+                      '투자 시뮬레이션',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: CupertinoColors.systemGrey,),
+                    ),
+                    const Spacer(),
+                    const Text('배당 재투자', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: CupertinoColors.systemGrey,),),
+                    const SizedBox(width: 10),
+                    CupertinoSwitch(
+                      value: context.watch<AppState>().reinvestDividends,
+                      onChanged: (value) {
+                        context.read<AppState>().updateReinvestDividends(value);
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ),
             SliverToBoxAdapter(child: _buildGranularitySegment()),
 
@@ -134,12 +170,15 @@ class _ResultScreenState extends State<ResultScreen> {
 
   // ── 상단 기간 세그먼트 ──
   Widget _buildSegment() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: CupertinoSlidingSegmentedControl<int>(
-        groupValue: _horizon,
-        children: {for (var e in _segMap.entries) e.value: Text(e.key)},
-        onValueChanged: (v) => setState(() => _horizon = v ?? _horizon),
+    return SizedBox(
+      width: double.infinity,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: CupertinoSlidingSegmentedControl<int>(
+          groupValue: _horizon,
+          children: {for (var e in _segMap.entries) e.value: Text(e.key)},
+          onValueChanged: (v) => setState(() => _horizon = v ?? _horizon),
+        ),
       ),
     );
   }
@@ -169,10 +208,10 @@ class _ResultScreenState extends State<ResultScreen> {
         ),
         padding: const EdgeInsets.all(12),
         child: SfCartesianChart(
-          title: const ChartTitle(
-            text: '연도별 배당 추이', // ← 변경
-            textStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-          ),
+          // title: const ChartTitle(
+          //   text: '연도별 배당 추이', // ← 변경
+          //   textStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          // ),
           plotAreaBorderWidth: 0,
           primaryXAxis: NumericAxis(
             interval: 1, // ← 1년 단위 눈금
@@ -374,79 +413,61 @@ class _ResultScreenState extends State<ResultScreen> {
     final List<_Point> pts = [];
     final List<_Row> rows = [];
 
-    // ── 동적 상태 ──
     final shares = positions.map((p) => p.quantity).toList();
     final prices = positions.map((p) => p.currentPrice).toList();
-    final yields = positions.map((p) => p.dividendYield).toList();
+    final dps = positions.map((p) => p.currentPrice * p.dividendYield).toList();
 
-    // ── 월 성장 계수 (복리) ──
-    final monthlyPriceFactor =
-        positions
-            .map<double>(
-              (p) => math.pow(1 + p.priceGrowthRate, 1 / 12) as double,
-            )
-            .toList();
-    final monthlyYieldFactor =
-        positions
-            .map<double>(
-              (p) => math.pow(1 + p.dividendGrowthRate, 1 / 12) as double,
-            )
-            .toList();
+    // 월 성장 계수 (복리)
+    final priceFactorM = positions.map<double>((p) => math.pow(1 + p.priceGrowthRate, 1 / 12) as double,).toList();
+    final dpsFactorM = positions.map<double>((p) => math.pow(1 + p.dividendGrowthRate, 1 / 12) as double,).toList();
 
-    // ── 투자 원금(초기 매입가) ──
+    // 초기 매입가
     double invested = positions.fold(0.0, (s, p) => s + p.quantity * p.avgCost);
 
     int? hit;
     final totalMonths = maxYears * 12;
+    double prevMonthDiv = 0;
+    final reinvestDividends = context.read<AppState>().reinvestDividends;
 
     for (int m = 0; m < totalMonths; m++) {
-      // ─────────────────────────────────────────────
-      // 1) 월말 매수 (allocationRate 비율로 분배 매수)
-      // ─────────────────────────────────────────────
+      // 월초 매수
       for (int i = 0; i < positions.length; i++) {
-        final buyCash = monthlyContribution * positions[i].allocationRate;
-        shares[i] += buyCash / prices[i];
+        final buyCash = monthlyContribution + (reinvestDividends ? prevMonthDiv : 0);
+        final allocation = buyCash * positions[i].allocationRate;
+        shares[i] += allocation / prices[i];
       }
       invested += monthlyContribution; // 실제 사용한 자본 누적
 
-      // ─────────────────────────────────────────────
-      // 2) 가격·배당 월 성장 적용
-      // ─────────────────────────────────────────────
+      // 가격, 배당 성장
       for (int i = 0; i < positions.length; i++) {
-        prices[i] *= monthlyPriceFactor[i];
-        yields[i] *= monthlyYieldFactor[i];
+        prices[i] *= priceFactorM[i];
+        dps[i] *= dpsFactorM[i];
       }
 
-      // ─────────────────────────────────────────────
-      // 3) 평가금·배당 계산 (매수분 포함)
-      // ─────────────────────────────────────────────
+      // 포트폴리오 가치 계산
       double monthDivTotal = 0;
       double portfolioValue = 0;
 
       for (int i = 0; i < positions.length; i++) {
-        final divPerShare = prices[i] * yields[i];
-        monthDivTotal += shares[i] * divPerShare / 12;
+        monthDivTotal += shares[i] * dps[i] / 12;
         portfolioValue += shares[i] * prices[i];
       }
 
-      // ── 포인트/행 저장 ──
+      prevMonthDiv = monthDivTotal;
+
+      // 결과 저장
       pts.add(_Point(m.toDouble(), monthDivTotal));
-
-      final annualDiv = monthDivTotal * 12;
-      final unrealized = portfolioValue - invested;
-      final yieldOnCost = annualDiv / portfolioValue;
-
       rows.add(
         _Row(
           DateTime.now().add(Duration(days: 30 * (m + 1))),
-          prices.first, // 시각화용 대표
-          prices.first * yields.first,
-          shares.reduce((a, b) => a + b), // 총 주식 수
+          prices.first,
+          dps.first,
+          shares.reduce((a, b) => a + b),
           monthDivTotal,
           portfolioValue,
           invested,
-          unrealized,
-          yieldOnCost,
+          portfolioValue - invested,
+          monthDivTotal * 12 / invested, // Yield-on-Cost
         ),
       );
 

@@ -304,7 +304,7 @@ Widget _sectionFieldWithHelper({
       return;
     }
     final priceGrow = double.tryParse(priceGrowText) ?? 0;
-    final alloc = _editing?.allocationRate ?? 0.0;
+    final alloc = _editing?.allocationRate ?? (app.positions.isEmpty ? 1.0 : 0.0);
 
     final newPosition = StockPosition(
       symbol: symbol,

@@ -10,6 +10,7 @@ class AppState extends ChangeNotifier {
 
   double targetPerMonth = 0;
   double monthlyContribution = 0;
+  bool reinvestDividends = true; // 배당 재투자 여부
   final List<StockPosition> _positions = [];
   bool _ready = false; // 데이터 로딩 완료 플래그
   bool get ready => _ready;
@@ -38,6 +39,11 @@ class AppState extends ChangeNotifier {
 
   void updateMonthlyContribution(double v) {
     monthlyContribution = v;
+    _save();
+  }
+
+  void updateReinvestDividends(bool v) {
+    reinvestDividends = v;
     _save();
   }
 
@@ -96,6 +102,7 @@ class AppState extends ChangeNotifier {
       final Map<String, dynamic> obj = jsonDecode(jsonStr);
       targetPerMonth = (obj['targetPerMonth'] as num).toDouble();
       monthlyContribution = (obj['monthlyContribution'] as num).toDouble();
+      reinvestDividends = obj['reinvestDividends'] as bool? ?? true;
       _positions
         ..clear()
         ..addAll((obj['positions'] as List)
@@ -110,6 +117,7 @@ class AppState extends ChangeNotifier {
     final obj = {
       'targetPerMonth': targetPerMonth,
       'monthlyContribution': monthlyContribution,
+      'reinvestDividends': reinvestDividends,
       'positions': _positions.map((e) => e.toJson()).toList(),
     };
     await prefs.setString(_storageKey, jsonEncode(obj));
