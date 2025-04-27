@@ -52,16 +52,16 @@ class _ResultScreenState extends State<ResultScreen> {
   List<_Row> _filterRows(List<_Row> src) {
     switch (_gran) {
       case _Gran.month:
-        return src;                                 // 모두 보여줌
+        return src; // 모두 보여줌
       case _Gran.quarter:
         return [
           for (int i = 0; i < src.length; i++)
-            if ((i + 1) % 3 == 0) src[i]            // 3,6,9,… 달만
+            if ((i + 1) % 3 == 0) src[i], // 3,6,9,… 달만
         ];
       case _Gran.year:
         return [
           for (int i = 0; i < src.length; i++)
-            if ((i + 1) % 12 == 0) src[i]           // 12,24,36,… 달만
+            if ((i + 1) % 12 == 0) src[i], // 12,24,36,… 달만
         ];
     }
   }
@@ -145,10 +145,14 @@ class _ResultScreenState extends State<ResultScreen> {
   }
 
   // ── 메인 차트 카드 ──
-  Widget _buildChartCard(List<_Point> data, double target) {
-    final double maxY =
-        data.map((e) => e.y).reduce((a, b) => a > b ? a : b) * 1.1;
+  Widget _buildChartCard(List<_Point> quarterlyData, double target) {
+    // 1) 연도 집계
+    final data = toYearly(quarterlyData);
 
+    // 2) 최대 Y 계산
+    final maxY = data.map((e) => e.y).reduce((a, b) => a > b ? a : b) * 1.1;
+
+    // 3) UI
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Container(
@@ -165,18 +169,16 @@ class _ResultScreenState extends State<ResultScreen> {
         ),
         padding: const EdgeInsets.all(12),
         child: SfCartesianChart(
-          title: ChartTitle(
-            text: '분기별 배당 추이',
-            textStyle: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+          title: const ChartTitle(
+            text: '연도별 배당 추이', // ← 변경
+            textStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           ),
           plotAreaBorderWidth: 0,
           primaryXAxis: NumericAxis(
-            interval: 3,
+            interval: 1, // ← 1년 단위 눈금
             majorGridLines: const MajorGridLines(width: 0),
             axisLine: const AxisLine(color: CupertinoColors.systemGrey4),
+            numberFormat: NumberFormat('0'), // 연도 표기에 소수점 제거
           ),
           primaryYAxis: NumericAxis(
             minimum: 0,
@@ -203,8 +205,12 @@ class _ResultScreenState extends State<ResultScreen> {
                 shape: DataMarkerType.circle,
               ),
             ),
+            // 목표선: 첫 해 ~ 마지막 해
             LineSeries<_Point, double>(
-              dataSource: [_Point(0, target), _Point(data.last.x, target)],
+              dataSource: [
+                _Point(data.first.x, target),
+                _Point(data.last.x, target),
+              ],
               xValueMapper: (d, _) => d.x,
               yValueMapper: (d, _) => d.y,
               width: 2,
@@ -449,6 +455,17 @@ class _ResultScreenState extends State<ResultScreen> {
     }
 
     return _Forecast(points: pts, rows: rows, hitMonth: hit);
+  }
+
+  // 월별 데이터에서 연도별 스냅샷만 추출한다.
+  // 매 12개월(0‑based index 11, 23, …) 시점의 값을 그대로 사용해
+  List<_Point> toYearly(List<_Point> monthly) {
+    final List<_Point> out = [];
+    for (int i = 11; i < monthly.length; i += 12) {
+      final yearIdx = (i ~/ 12) + 1;
+      out.add(_Point(yearIdx.toDouble(), monthly[i].y));
+    }
+    return out;
   }
 }
 

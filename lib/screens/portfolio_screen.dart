@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
@@ -190,9 +191,17 @@ class _InvestSettingsCardState extends State<_InvestSettingsCard> {
             content: Column(
               children: [
                 const SizedBox(height: 8),
-                _CupertinoField(label: '목표 월 배당금', controller: goalCtl),
+                _CupertinoField(
+                  label: '목표 월 배당금',
+                  controller: goalCtl,
+                  placeholder: 'USD',
+                ),
                 const SizedBox(height: 12),
-                _CupertinoField(label: '월 투자 금액', controller: monthlyCtl),
+                _CupertinoField(
+                  label: '월 투자 금액',
+                  controller: monthlyCtl,
+                  placeholder: 'USD',
+                ),
               ],
             ),
             actions: [
@@ -274,15 +283,20 @@ class _InvestSettingsCardState extends State<_InvestSettingsCard> {
 }
 
 class _CupertinoField extends StatelessWidget {
-  const _CupertinoField({required this.label, required this.controller});
+  const _CupertinoField({
+    required this.label,
+    required this.controller,
+    this.placeholder = '',
+  });
   final String label;
+  final String placeholder;
   final TextEditingController controller;
 
   @override
   Widget build(BuildContext context) {
     return CupertinoTextField(
       controller: controller,
-      placeholder: label,
+      placeholder: placeholder,
       prefix: Padding(
         padding: const EdgeInsets.only(left: 8),
         child: Text(
@@ -333,6 +347,10 @@ class _StockCardState extends State<_StockCard> {
     final p = widget.p;
 
     return GestureDetector(
+      behavior: HitTestBehavior.translucent, // 빈 공간 터치 감지
+      onTap: () {
+        FocusScope.of(context).unfocus(); // 키보드 내려감
+      },
       onLongPress: () => _showMenu(context),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -344,7 +362,7 @@ class _StockCardState extends State<_StockCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 심볼·평가금
+            // 심볼과 평가금
             Row(
               children: [
                 Text(
@@ -403,31 +421,27 @@ class _StockCardState extends State<_StockCard> {
                 const Spacer(),
                 const Text(
                   '배분 비율',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                        fontSize: 11,
+                        color: CupertinoColors.systemGrey,
+                      ),
                 ),
                 const SizedBox(width: 8),
-                SizedBox(
-                  width: 70,
-                  child: CupertinoTextField(
-                    controller: _allocCtl,
-                    showCursor: false,
-                    cursorColor: CupertinoColors.transparent,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: false,
-                    ),
-                    suffix: const Text(
-                      '% ',
-                      style: TextStyle(color: CupertinoColors.systemGrey),
-                    ),
-                    textAlign: TextAlign.end,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 6,
-                      horizontal: 8,
-                    ),
-                    onChanged: (txt) {
-                      final pct = (double.tryParse(txt) ?? 0) / 100;
-                      context.read<AppState>().updateAllocation(widget.p, pct);
-                    },
+                GestureDetector(
+                  child: Row(
+                    children: [
+                      Text(
+                        '${(widget.p.allocationRate * 100).toStringAsFixed(0)} %',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(width: 1),
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        minSize: 12,
+                        onPressed: () => _showAllocationPopup(context),
+                        child: const Icon(CupertinoIcons.pencil),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -507,6 +521,64 @@ class _StockCardState extends State<_StockCard> {
               CupertinoDialogAction(
                 child: const Text('취소'),
                 onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _showAllocationPopup(BuildContext context) async {
+    final allocCtl = TextEditingController(
+      text: (widget.p.allocationRate * 100).toStringAsFixed(0),
+    );
+
+    await showCupertinoDialog<void>(
+      context: context,
+      builder:
+          (ctx) => CupertinoAlertDialog(
+            title: const Text('배분 비율 (%)'),
+            content: Column(
+              children: [
+                const SizedBox(height: 8),
+                _CupertinoField(label: '배분비율', controller: allocCtl),
+              ],
+            ),
+            actions: [
+              CupertinoDialogAction(
+                isDefaultAction: true,
+                child: const Text('저장'),
+                onPressed: () {
+                  final val = int.tryParse(allocCtl.text);
+                  final isValid = val != null && val > 0 && val <= 100;
+
+                  if (!isValid) {
+                    showCupertinoDialog(
+                      context: context,
+                      builder:
+                          (_) => CupertinoAlertDialog(
+                            title: const Text('입력 오류'),
+                            content: const Text('0부터 100까지의 정수를 입력하세요.'),
+                            actions: [
+                              CupertinoDialogAction(
+                                child: const Text('확인'),
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ],
+                          ),
+                    );
+                    return; // 저장 중단
+                  }
+
+                  context.read<AppState>().updateAllocation(
+                    widget.p,
+                    val! / 100,
+                  ); // 안전하게 val 사용
+                  Navigator.pop(ctx); // 편집 팝업 닫기
+                },
+              ),
+              CupertinoDialogAction(
+                child: const Text('취소'),
+                onPressed: () => Navigator.pop(ctx),
               ),
             ],
           ),
